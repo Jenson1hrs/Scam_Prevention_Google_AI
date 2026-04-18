@@ -1,81 +1,127 @@
-"""Main FastAPI application for SEMA Fraud Detection System."""
+"""Main FastAPI application for SEMA Fraud Detection System.
+
+Multi-agent pipeline:
+  1. ML Agent (XGBoost) produces a base risk probability.
+  2. Pattern Agent (Gemini) classifies against Malaysian scam typologies.
+  3. Context Agent (Gemini) evaluates behavioural signals.
+  4. Orchestrator blends all three into a final verdict.
+"""
+
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional, List
+from typing import Optional, List
 import logging
-import joblib
-import numpy as np
-from pathlib import Path
-import os
 
-# Configure logging
+from src.gemini_agent import GeminiAgent
+from src.agents.ml_agent import MLAgent
+from src.agents.pattern_agent import PatternAgent
+from src.agents.context_agent import ContextAgent
+from src.agents.orchestrator import run_fraud_analysis
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Define the request model - MATCHES WHAT YOU SEE IN /docs
+
+# ── Request / Response schemas ────────────────────────────────────────
+
 class TransactionRequest(BaseModel):
-    """Transaction data for fraud prediction"""
+    """Transaction data for fraud prediction."""
     amount: float = Field(..., description="Transaction amount in RM", gt=0)
     transaction_type: str = Field(default="online", description="online, pos, atm, transfer")
-    # Add all the fields that your model expects
     is_new_device: int = Field(default=0, description="1 if new device, 0 if known")
-    is_night: int = Field(default=0, description="1 if 10PM-5AM, 0 otherwise")
-    is_small_amount: int = Field(default=0, description="1 if amount < RM100")
-    is_round_amount: int = Field(default=0, description="1 if amount is round number")
+    is_night: int = Field(default=0, description="1 if 10 PM–5 AM, 0 otherwise")
+    is_small_amount: int = Field(default=0, description="1 if amount < RM 100")
+    is_round_amount: int = Field(default=0, description="1 if amount is a round number")
+
+
+class SHAPFeature(BaseModel):
+    """Single SHAP feature contribution."""
+    feature: str
+    impact: float
+    direction: str
+
 
 class PredictionResponse(BaseModel):
-    """Prediction response"""
+    """Multi-agent fraud analysis result."""
     risk_score: float
+    ml_risk_score: float
+    gemini_risk_score: Optional[float] = None
+    pattern_risk_score: Optional[float] = None
+    context_risk_score: Optional[float] = None
     status: str
     risk_level: str
-    explanation: Optional[List[Dict[str, Any]]] = None
+    scam_type: Optional[str] = None
+    matched_patterns: Optional[List[str]] = None
+    suspicious_signals: Optional[List[str]] = None
+    explanation: Optional[str] = None
+    recommended_action: Optional[str] = None
+    shap_explanation: Optional[List[SHAPFeature]] = None
     message: str
+    analysis_mode: str = Field(description="'multi_agent', 'ml_only', or 'fallback'")
 
-# Global variables for model
-model = None
-feature_names = None
 
-# Paths
-BASE_DIR = Path(__file__).resolve().parent.parent
-MODELS_DIR = BASE_DIR / "models"
+class MessageRequest(BaseModel):
+    """SMS / WhatsApp message to analyse for scam patterns."""
+    message: str = Field(..., min_length=1, description="Message text to analyse")
+    sender: Optional[str] = Field(None, description="Sender number or name")
 
-def load_model():
-    """Load the trained model"""
-    global model, feature_names
-    
-    try:
-        model_path = MODELS_DIR / "fraud_pipeline.joblib"
-        features_path = MODELS_DIR / "feature_names.joblib"
-        
-        if not model_path.exists():
-            logger.error(f"Model not found at {model_path}")
-            logger.info(f"Please train the model first using notebooks/01_data_exploration.ipynb")
-            return False
-        
-        model = joblib.load(model_path)
-        
-        if features_path.exists():
-            feature_names = joblib.load(features_path)
-        
-        logger.info(f"✅ Model loaded successfully from {model_path}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Error loading model: {e}")
-        return False
 
-# Create FastAPI app
+class MessageAnalysisResponse(BaseModel):
+    """Scam detection result for a message."""
+    is_scam: bool
+    confidence: float
+    scam_type: str
+    red_flags: List[str]
+    explanation: str
+    advice: str
+
+
+# ── Global agent instances ────────────────────────────────────────────
+
+ml_agent: Optional[MLAgent] = None
+pattern_agent: Optional[PatternAgent] = None
+context_agent: Optional[ContextAgent] = None
+gemini_agent: Optional[GeminiAgent] = None
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Initialise agents on startup, clean up on shutdown."""
+    global ml_agent, pattern_agent, context_agent, gemini_agent
+
+    ml_agent = MLAgent()
+    pattern_agent = PatternAgent()
+    context_agent = ContextAgent()
+    gemini_agent = GeminiAgent()
+
+    logger.info(
+        "Startup complete  ML=%s  Pattern=%s  Context=%s  Gemini=%s",
+        ml_agent.available,
+        pattern_agent.available,
+        context_agent.available,
+        gemini_agent.available,
+    )
+    yield
+
+
+# ── FastAPI app ───────────────────────────────────────────────────────
+
 app = FastAPI(
     title="SEMA Fraud Detection API",
-    description="Explainable AI system for preventing financial scams",
+    description=(
+        "Explainable AI system for preventing financial scams in Malaysia. "
+        "Uses a multi-agent architecture: XGBoost ML model + Google Gemini "
+        "pattern analysis + behavioural context evaluation."
+    ),
     version="2.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -84,139 +130,121 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load model on startup
-@app.on_event("startup")
-async def startup_event():
-    """Load model when API starts"""
-    success = load_model()
-    if not success:
-        logger.warning("⚠️ Model not loaded. Using fallback prediction.")
+
+# ── Endpoints ─────────────────────────────────────────────────────────
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
     return {
-        "message": "Welcome to SEMA Fraud Detection API",
+        "service": "SEMA Fraud Detection API",
+        "version": "2.0.0",
         "status": "running",
-        "model_loaded": model is not None,
-        "endpoints": ["/health", "/predict", "/docs"]
+        "agents": {
+            "ml": ml_agent.available if ml_agent else False,
+            "pattern": pattern_agent.available if pattern_agent else False,
+            "context": context_agent.available if context_agent else False,
+            "gemini_message": gemini_agent.available if gemini_agent else False,
+        },
+        "endpoints": {
+            "health": "/health",
+            "predict": "/predict  [POST]",
+            "analyze_message": "/analyze-message  [POST]",
+            "docs": "/docs",
+        },
     }
+
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
     return {
         "status": "healthy",
-        "model_loaded": model is not None,
+        "ml_model_loaded": ml_agent.available if ml_agent else False,
+        "gemini_available": gemini_agent.available if gemini_agent else False,
     }
 
-def prepare_features(amount: float, is_small_amount: int, is_round_amount: int, is_night: int, is_new_device: int) -> np.ndarray:
-    """
-    Prepare features for model prediction.
-    Creates a 32-feature array matching the training data format.
-    """
-    # V1-V28: use 0 (median of normalized values for a typical transaction)
-    v_features = [0.0] * 28
-    
-    # Scale amount (rough approximation of training scaling)
-    # In training, Amount was normalized with mean ~88, std ~250
-    amount_scaled = (amount - 88.35) / 250.0
-    amount_scaled = max(-3, min(3, amount_scaled))  # Clip to reasonable range
-    
-    # Time feature (use 0 as default)
-    time_scaled = 0.0
-    
-    # Synthetic features
-    is_night_val = float(is_night)
-    is_weekend = 0.0  # Default
-    is_small_amount_val = float(is_small_amount)
-    is_round_amount_val = float(is_round_amount)
-    amount_deviation = 0.0  # Default
-    
-    # Combine all features in the correct order (must match training!)
-    features = v_features + [amount_scaled, time_scaled, is_night_val, is_weekend, 
-                              is_small_amount_val, is_round_amount_val, amount_deviation]
-    
-    return np.array(features).reshape(1, -1)
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(transaction: TransactionRequest):
-    """
-    Predict fraud risk for a transaction.
-    Returns risk score (0-100), risk level, and explanation.
-    """
-    # If model is not loaded, use fallback
-    if model is None:
-        # Fallback logic based on amount only
-        risk_score = min(100, (transaction.amount / 10000) * 100)
-        if transaction.is_night:
-            risk_score += 10
-        if transaction.is_new_device:
-            risk_score += 15
-        risk_score = min(100, risk_score)
-        
-        if risk_score > 70:
-            status = "HIGH RISK 🚨"
-            risk_level = "HIGH"
-            message = "⚠️ Model not loaded. Using fallback rules. Please train the model first."
-        elif risk_score > 40:
-            status = "MEDIUM RISK ⚠️"
-            risk_level = "MEDIUM"
-            message = "⚠️ Model not loaded. Using fallback rules. Please train the model first."
-        else:
-            status = "LOW RISK ✅"
-            risk_level = "LOW"
-            message = "⚠️ Model not loaded. Using fallback rules. Please train the model first."
-        
-        return PredictionResponse(
-            risk_score=round(risk_score, 2),
-            status=status,
-            risk_level=risk_level,
-            explanation=None,
-            message=message
-        )
-    
-    try:
-        # Prepare features using the transaction data
-        features = prepare_features(
-            amount=transaction.amount,
-            is_small_amount=transaction.is_small_amount,
-            is_round_amount=transaction.is_round_amount,
-            is_night=transaction.is_night,
-            is_new_device=transaction.is_new_device
-        )
-        
-        # Get prediction probability
-        probability = model.predict_proba(features)[0][1]
-        risk_score = round(probability * 100, 2)
-        
-        # Determine risk level
-        if risk_score > 70:
-            status = "HIGH RISK 🚨"
-            risk_level = "HIGH"
-            message = "This transaction has high fraud indicators. Please verify carefully."
-        elif risk_score > 40:
-            status = "MEDIUM RISK ⚠️"
-            risk_level = "MEDIUM"
-            message = "This transaction shows some risk indicators. Consider additional verification."
-        else:
-            status = "LOW RISK ✅"
-            risk_level = "LOW"
-            message = "This transaction appears legitimate based on available data."
-        
-        return PredictionResponse(
-            risk_score=risk_score,
-            status=status,
-            risk_level=risk_level,
-            explanation=None,  # SHAP will be added later
-            message=message
-        )
-        
-    except Exception as e:
-        logger.error(f"Prediction error: {e}")
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+    """Run the full multi-agent fraud analysis pipeline."""
 
-# For local testing
+    result = await run_fraud_analysis(
+        amount=transaction.amount,
+        transaction_type=transaction.transaction_type,
+        is_new_device=transaction.is_new_device,
+        is_night=transaction.is_night,
+        is_small_amount=transaction.is_small_amount,
+        is_round_amount=transaction.is_round_amount,
+        ml_agent=ml_agent,
+        pattern_agent=pattern_agent,
+        context_agent=context_agent,
+    )
+
+    # Build human-readable explanation
+    parts = []
+    if result.pattern_reasoning:
+        parts.append(result.pattern_reasoning)
+    if result.context_summary:
+        parts.append(result.context_summary)
+    explanation = " ".join(parts) if parts else None
+
+    if result.analysis_mode == "multi_agent":
+        message = "Multi-agent analysis complete (ML + Pattern + Context)."
+    elif result.analysis_mode == "ml_only":
+        message = "ML prediction only. Gemini agents unavailable."
+    else:
+        message = "Fallback rule-based scoring. ML model not loaded."
+
+    shap_data = [SHAPFeature(**f) for f in result.shap_explanation] if result.shap_explanation else None
+
+    return PredictionResponse(
+        risk_score=result.final_score,
+        ml_risk_score=result.ml_score,
+        gemini_risk_score=result.gemini_score,
+        pattern_risk_score=result.pattern_score,
+        context_risk_score=result.context_score,
+        status=f"{result.risk_level} RISK",
+        risk_level=result.risk_level,
+        scam_type=result.scam_type,
+        matched_patterns=result.matched_patterns or None,
+        suspicious_signals=result.suspicious_signals or None,
+        explanation=explanation,
+        recommended_action=result.recommended_action,
+        shap_explanation=shap_data,
+        message=message,
+        analysis_mode=result.analysis_mode,
+    )
+
+
+@app.post("/analyze-message", response_model=MessageAnalysisResponse)
+async def analyze_message(request: MessageRequest):
+    """Detect scam patterns in an SMS or WhatsApp message using Gemini."""
+
+    if not gemini_agent or not gemini_agent.available:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini is not configured. Set the GEMINI_API_KEY environment variable.",
+        )
+
+    result = await gemini_agent.analyze_message(
+        message_text=request.message,
+        sender=request.sender,
+    )
+
+    if result is None:
+        raise HTTPException(status_code=502, detail="Gemini analysis failed. Please try again.")
+
+    return MessageAnalysisResponse(
+        is_scam=result.get("is_scam", False),
+        confidence=float(result.get("confidence", 0)),
+        scam_type=result.get("scam_type", "unknown"),
+        red_flags=result.get("red_flags", []),
+        explanation=result.get("explanation", "Unable to determine."),
+        advice=result.get("advice", "Exercise caution with this message."),
+    )
+
+
+# ── Local dev entry point ─────────────────────────────────────────────
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
