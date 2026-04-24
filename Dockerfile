@@ -24,4 +24,4 @@ EXPOSE 8080
 # GEMINI_API_KEY should be injected via Cloud Run secrets, not baked in.
 # Example:  gcloud run deploy ... --set-secrets=GEMINI_API_KEY=gemini-key:latest
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]

@@ -140,6 +140,7 @@ class GeminiAgent:
         self,
         message_text: str,
         sender: Optional[str] = None,
+        max_retries: int = 3,
     ) -> Optional[dict]:
         """Ask Gemini to detect scam patterns in a text message.
 
@@ -153,7 +154,7 @@ class GeminiAgent:
             sender_info=sender or "Unknown",
         )
 
-        return await self._call_gemini(prompt)
+        return await self._call_gemini(prompt, max_retries=max_retries)
 
     async def _call_gemini(self, prompt: str, max_retries: int = 3) -> Optional[dict]:
         """Send a prompt to Gemini with automatic retry on rate limits."""

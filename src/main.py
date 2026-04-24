@@ -20,6 +20,7 @@ from src.agents.ml_agent import MLAgent
 from src.agents.pattern_agent import PatternAgent
 from src.agents.context_agent import ContextAgent
 from src.agents.orchestrator import run_fraud_analysis
+from src.whatsapp_integration import router as whatsapp_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -129,6 +130,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(whatsapp_router)
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────
@@ -149,6 +151,7 @@ async def root():
             "health": "/health",
             "predict": "/predict  [POST]",
             "analyze_message": "/analyze-message  [POST]",
+            "whatsapp_webhook": "/whatsapp  [POST]",
             "docs": "/docs",
         },
     }

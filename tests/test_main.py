@@ -101,3 +101,24 @@ def test_analyze_message_empty(client):
     """Empty message should be rejected by validation."""
     response = client.post("/analyze-message", json={"message": ""})
     assert response.status_code == 422
+
+
+# ── /whatsapp endpoint ────────────────────────────────────────────────
+
+def test_whatsapp_webhook_form_success(client, monkeypatch):
+    """Twilio webhook should accept form-encoded payload and return XML."""
+    monkeypatch.setattr("src.whatsapp_integration.TWILIO_AUTH_TOKEN", "")
+    response = client.post("/whatsapp", data={
+        "From": "whatsapp:+60123456789",
+        "Body": "Your account is frozen. Click this link now.",
+    })
+    assert response.status_code == 200
+    assert "application/xml" in response.headers["content-type"]
+    assert "<Response>" in response.text
+    assert "<Message>" in response.text
+
+
+def test_whatsapp_webhook_missing_body(client):
+    """Body is required in Twilio webhook payload."""
+    response = client.post("/whatsapp", data={"From": "whatsapp:+60123456789"})
+    assert response.status_code == 422
