@@ -63,17 +63,17 @@ API_BASE = st.sidebar.text_input(
 # ── Page router ────────────────────────────────────────────────────────
 
 if page == "🏠 Home":
-    from src.frontend.pages.home import render
+    from src.frontend._pages.home import render
     render(API_BASE, risk_badge)
 
 elif page == "💳 Transaction Scanner":
-    from src.frontend.pages.transaction_scanner import render
+    from src.frontend._pages.transaction_scanner import render
     render(API_BASE, risk_badge)
 
 elif page == "💬 Message Analyser":
-    from src.frontend.pages.message_analyser import render
+    from src.frontend._pages.message_analyser import render
     render(API_BASE, risk_badge)
 
 elif page == "ℹ️ About":
-    from src.frontend.pages.about import render
+    from src.frontend._pages.about import render
     render()
