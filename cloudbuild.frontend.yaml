@@ -1,0 +1,11 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.frontend
+      - -t
+      - gcr.io/ai-fraud-prevention-assistant/sema-frontend
+      - .
+images:
+  - gcr.io/ai-fraud-prevention-assistant/sema-frontend
