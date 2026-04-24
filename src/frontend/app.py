@@ -1,6 +1,13 @@
 """SEMA Fraud Detection Dashboard main Streamlit entry point."""
 
+import os
+
 import streamlit as st
+
+DEFAULT_API_BASE = os.getenv(
+    "SEMA_API_BASE_URL",
+    "https://sema-api-198988041892.asia-southeast1.run.app",
+)
 
 st.set_page_config(
     page_title="SEMA - Scam Prevention",
@@ -546,7 +553,7 @@ st.sidebar.markdown('<p class="sema-side-section">Backend</p>', unsafe_allow_htm
 
 api_base = st.sidebar.text_input(
     "API URL",
-    value="http://localhost:8000",
+    value=DEFAULT_API_BASE,
     help="Base URL for the SEMA FastAPI backend",
 )
 
