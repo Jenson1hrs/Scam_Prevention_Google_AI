@@ -151,13 +151,13 @@ Dashboard at: http://localhost:8501
 
 ## API Endpoints
 
-| Method | Endpoint                         | Description                                                               |
-| ------ | -------------------------------- | ------------------------------------------------------------------------- |
-| GET    | `/`                              | Service info and agent status                                             |
-| GET    | `/health`                        | Health check                                                              |
-| POST   | `/predict`                       | Multi-agent transaction fraud analysis                                    |
-| POST   | `/analyze-message`               | Scam message detection                                                    |
-| POST   | `/whatsapp`                      | Twilio WhatsApp webhook (returns TwiML XML)                                |
+| Method | Endpoint           | Description                                 |
+| ------ | ------------------ | ------------------------------------------- |
+| GET    | `/`                | Service info and agent status               |
+| GET    | `/health`          | Health check                                |
+| POST   | `/predict`         | Multi-agent transaction fraud analysis      |
+| POST   | `/analyze-message` | Scam message detection                      |
+| POST   | `/whatsapp`        | Twilio WhatsApp webhook (returns TwiML XML) |
 
 ### Example: Transaction prediction
 
@@ -250,6 +250,15 @@ Use this checklist when integrating Twilio with the Cloud Run deployment:
    - `https://YOUR_CLOUD_RUN_URL/docs`
 7. Test by sending a WhatsApp message to the Twilio sandbox number after joining the sandbox.
 
+### Connect your phone to the Twilio WhatsApp Sandbox
+
+Each person testing must **join** the sandbox once before inbound/outbound WhatsApp works with your webhook.
+
+1. In Twilio Console go to **Messaging → Try it out → Send a WhatsApp message** (WhatsApp Sandbox).
+2. Connect using either method Twilio shows on that page:
+   - In WhatsApp on your phone, send a message **to** the sandbox number with the join text Twilio displays (for this project’s sandbox: send to **+1 415 523 8886** with body **`join rabbit-structure`** — use copy/paste so spacing matches).
+3. Wait for Twilio’s confirmation reply; then messages to that sandbox number will hit your **`/whatsapp`** webhook.
+
 ## Integration Notes (Session Summary)
 
 What was completed for Twilio + Cloud Run integration:
@@ -275,7 +284,7 @@ Current `/whatsapp` reply behavior:
 
 - Normal analysis success (scam): returns `SCAM ALERT` with confidence, reason, red flags, and advice
 - Normal analysis success (safe): returns `Likely safe message` with confidence, reason, and advice
-- Gemini unavailable/timeout/failure/rate-limit unresolved: returns empty TwiML (`<Response/>`) and sends no WhatsApp message (to preserve Twilio daily quota)
+- Gemini unavailable/timeout/failure/rate-limit unresolved: returns empty TwiML (`<Response/>`) and sends no WhatsApp message (to preserve Twilio daily quota, 5 daily message)
 - Invalid/missing Twilio signature: webhook returns HTTP `403` (typically no WhatsApp reply)
 
 ---
